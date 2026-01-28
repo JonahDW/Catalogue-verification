@@ -22,7 +22,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 import bdsf
-import helpers
+from utils import helpers
 
 def save_load_results(func):
     def wrapper(self, *args, **kwargs):
@@ -39,12 +39,13 @@ def save_load_results(func):
         else:
             data = func(self, *args, **kwargs)
             # Save data to a json file
+            # Temporary solution for numpy 2.0
             with open(filename, 'w') as outfile:
                 json.dump(data, outfile,
                           indent=4, sort_keys=True,
                           separators=(',', ': '),
-                          ensure_ascii=False,
-                          cls=NumpyEncoder)
+                          ensure_ascii=False)#,
+                          #cls=NumpyEncoder)
         return data
     return wrapper
 
@@ -386,9 +387,9 @@ class Image:
 
             detected_fraction[i,:], flux_fraction[i,:] = self.get_fractions(matched_cat, flux_bins, n_sources)
 
-        completeness = {'flux_bins': flux_bins,
-                        'detected_fraction': detected_fraction,
-                        'flux_fraction': flux_fraction}
+        completeness = {'flux_bins': flux_bins.tolist(),
+                        'detected_fraction': detected_fraction.tolist(),
+                        'flux_fraction': flux_fraction.tolist()}
 
         return completeness
 

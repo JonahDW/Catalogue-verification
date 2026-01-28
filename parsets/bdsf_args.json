@@ -2,14 +2,13 @@
     "process_image" : {
         "thresh_isl" : 3.0,
         "thresh_pix" : 5.0,
-        "rms_box" : "(250,30)",
-        "group_by_isl" : true,
-        "atrous_do" : true,
-        "atrous_orig_isl" : true,
-        "atrous_jmax" : 3,
-        "maxpix_isl" : 500,
-        "output_opts" : true,
-        "quiet" : true
+        "rms_box" : "(150,30)",
+        "adaptive_rms_box" : true,
+        "adaptive_thresh" : 50.0,
+        "rms_box_bright" : null,
+        "maxpix_isl" : 4000.0,
+        "spline_rank" : 1,
+        "flagging_opts": true
     },
     "write_catalog" : {
         "catalog_type" : "srl",

@@ -71,18 +71,15 @@ optional arguments:
 
 ## purity.py 
 
-Assess the purity of sourcefinding by extracting the amount of fake sources in an image, accomplished by inverting the regular image and performing sourcefinding on it. This can be compared to the regular catalog of sources already obtained.
-
+Assess the purity of sourcefinding by by inverting the regular image and performing sourcefinding on it. 
 ```
-usage: purity.py [-h] [--full_catalog FULL_CATALOG] [--clean_up] input_dir
+usage: purity.py [-h] [--clean_up] image
 
 positional arguments:
-  input_dir             Input directory containing pybdsf directories.
+  image       Input image.
 
 optional arguments:
-  -h, --help            show this help message and exit
-  --full_catalog FULL_CATALOG
-                        Full catalog for comparison with inverse catalog.
-  --clean_up            Clean up output for individual images leaving only the
-                        combined catalog
+  -h, --help  show this help message and exit
+  --clean_up  Clean up output for individual images leaving only the combined
+              catalog
 ```
