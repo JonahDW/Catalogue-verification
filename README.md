@@ -1,10 +1,10 @@
-# Purity-completeness
+# Catalogue verification
 
-The purpose of this module is to assess the purity and completeness of a radio astronomical image. This code makes extensive use `astropy` and uses [PyBDSF](https://github.com/lofar-astron/PyBDSF) and its dependencies for its sourcefinding. Usage of this module assumes that regular sourcefinding has already been performed with PyBDSF, with certain outputs from that process expected to be present (residual, mean and rms images).
+The purpose of this module is to assess the purity and completeness of a radio astronomical image. This code makes extensive use `astropy` and uses [PyBDSF](https://github.com/lofar-astron/PyBDSF) and its dependencies for its sourcefinding. Usage of this module assumes that regular sourcefinding has already been performed with PyBDSF, with certain outputs from that process expected to be present (`gaus_resid`, `mean` and `rms` images).
 
-## completeness.py
+## completeness_simulations.py
 
-Assess the completeness of your image by injecting fake sources, either as randomly drawn point sources, or more realistic sources drawn from a catalog of simulated sources into the desired image, performing sourcefinding on the image, and seeing how many sources are retrieved. Recovered sources are matched to the original input catalog, enabling a range of verification and consistency tests of the sourcefinding procedure.
+Assess the completeness (and other relevant quality measures) of your image by injecting fake sources, either as randomly drawn point sources, or more realistic sources drawn from a catalog of simulated sources into the desired image, performing sourcefinding on the image, and seeing how many sources are retrieved. Recovered sources are matched to the original input catalog, enabling a range of verification and consistency tests of the sourcefinding procedure.
 
 ```
 usage: completeness.py [-h] [--flux_bins FLUX_BINS] [--n_sim N_SIM]
