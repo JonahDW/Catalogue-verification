@@ -1,3 +1,4 @@
+import logging
 import copy
 import glob
 import json
@@ -23,6 +24,8 @@ from pathlib import Path
 
 import bdsf
 from utils import helpers
+
+logger = logging.getLogger('completeness-simulations')
 
 def save_load_results(func):
     def wrapper(self, *args, **kwargs):
@@ -51,7 +54,7 @@ def save_load_results(func):
 
 class Image:
 
-    def __init__(self, image_name, outdir=None):
+    def __init__(self, image_name, imsize, square=False, outdir=None):
         self.image_id = os.path.basename(image_name)
         self.image_dir = os.path.dirname(image_name)
         self.image_file = image_name+'_gaus_resid.fits'
@@ -79,9 +82,24 @@ class Image:
             hdu = fits.PrimaryHDU(data=image_data, header=fits.Header(self.header))
             self.hdulist = fits.HDUList([hdu])
 
+            self.square = True
+            self.imsize = self.header['NAXIS1'] * self.header['CDELT1']
         else:
             self.hdulist = fits.open(self.image_file)
             self.header = self.hdulist[0].header
+
+            self.square = square
+            # Get image size for injecting sources
+            if imsize is None:
+                # Get furthest non-nan pixel in image
+                pixel_scale = max(self.header['CDELT1'],self.header['CDELT2'])
+                image_data = np.squeeze(self.hdulist[0].data)
+
+                grid = np.indices(image_data.shape)
+                rr = np.sqrt( (grid[0] - self.header['CRPIX1'])**2 + (grid[1] - self.header['CRPIX2'])**2 )
+                self.imsize = 2 * np.max(rr[~np.isnan(image_data)]) * pixel_scale
+            else:
+                self.imsize = imsize
 
         # Initialize catalog of matches
         self.matched_catalog = Table()
@@ -175,10 +193,24 @@ class Image:
                                       x_size=51, y_size=51)
         gauss_beam_new = gauss_beam.array/gauss_beam.array.max()
 
+        # Mask so sources that are skipped are not counted against completeness
+        catalog_mask = np.full(len(catalog), True, dtype=bool)
+
         data_2d = np.zeros(np.squeeze(image).shape)
-        for source in catalog:
+        for i, source in enumerate(catalog):
             sky = SkyCoord(source['lon'], source['lat'], unit=u.deg)
             X, Y = wcs.world_to_pixel(sky)
+
+            # Check if inside usable image
+            if 0 < int(Y) < data_2d.shape[0] and 0 < int(X) < data_2d.shape[0]:
+                if np.squeeze(image)[int(Y), int(X)] == np.nan:
+                    logger.debug('Source is in nan area, it will be skipped!')
+                    catalog_mask[i] = False
+                    continue
+            else:
+                logger.debug('Source is somehow out of bounds, it will be skipped!')
+                catalog_mask[i] = False
+                continue
 
             # Check if point source and add accordingly
             if source['major_axis'] != 0.:
@@ -205,19 +237,17 @@ class Image:
                 data_2d[int(Y)-150-minY:int(Y)+151-maxY,
                         int(X)-150-minX:int(X)+151-maxX] += source[-minY:301-maxY,-minX:301-maxX]
             else:
-                try: 
-                    data_2d[int(Y),int(X)] += 10**source['flux']
-                except IndexError:
-                    print('Source was somehow out of bounds, it will be skipped!')
-                    continue
+                data_2d[int(Y),int(X)] += 10**source['flux']
+        catalog = catalog[catalog_mask]
 
+        # Convolve
         data_2d[data_2d < 1e-10] = np.nan
         convolved_sources = convolve(data_2d, gauss_beam_new, 
                                      normalize_kernel=False, nan_treatment='fill')
 
-        return convolved_sources
+        return catalog, convolved_sources
 
-    def inject_sources(self, catalog, outfile, rpos, imsize, square):
+    def inject_sources(self, catalog, outfile, rpos):
         '''
         Insert sources into an (empty) image from input catalog
 
@@ -227,35 +257,21 @@ class Image:
         flux_col   -- Desired column to extract flux from
         '''
         new_image = copy.deepcopy(self.hdulist)
-
-        if imsize is None:
-            pixel_scale = max(self.header['CDELT1'],self.header['CDELT2'])
-            imlen = min(np.squeeze(new_image[0].data).shape)
-            imsize = imlen*pixel_scale
+        image_data = new_image[0].data
 
         # Generate random positions for sources
-        radius = imsize/2
+        radius = self.imsize/2
         if rpos:
-            if self.image_id == 'empty':
-                catalog = helpers.slice_catalog(catalog, self.header['CRVAL1'],
-                                                self.header['CRVAL2'], radius, square=True)
-            else:
-                catalog = helpers.slice_catalog(catalog, self.header['CRVAL1'],
-                                                self.header['CRVAL2'], radius, square=square)
+            catalog = helpers.slice_catalog(catalog, self.header['CRVAL1'],
+                                            self.header['CRVAL2'], radius, 
+                                            square=self.square)
         else:
-            if self.image_id == 'empty':
-                catalog['lon'], catalog['lat'] = helpers.random_lonlat(self.header['CRVAL1'],
-                                                                      self.header['CRVAL2'], 
-                                                                      radius, len(catalog),
-                                                                      square=True)
-            else:
-                catalog['lon'], catalog['lat'] = helpers.random_lonlat(self.header['CRVAL1'],
-                                                                      self.header['CRVAL2'],
-                                                                      radius, len(catalog),
-                                                                      square=square)
+            catalog['lon'], catalog['lat'] = helpers.random_lonlat(self.header['CRVAL1'],
+                                                                   self.header['CRVAL2'],
+                                                                   radius, len(catalog),
+                                                                   square=self.square)
 
-        image_data = new_image[0].data
-        convolved_sources = self.convolve_sources(catalog, image_data)
+        catalog, convolved_sources = self.convolve_sources(catalog, image_data)
 
         image_data[0,0,:,:] += convolved_sources
 
@@ -310,8 +326,7 @@ class Image:
         return detected_fraction, flux_fraction
 
     @save_load_results
-    def do_completeness(self, flux_bins, n_sim, n_sources, sim_cat, rflux, rpos,
-                        imsize, square, no_delete, s_type):
+    def do_completeness(self, flux_bins, n_sim, n_sources, sim_cat, rflux, rpos, no_delete, s_type):
         '''
         Do one set of simulations on an image in order to measure the completeness
 
@@ -325,7 +340,7 @@ class Image:
         detected_fraction = np.zeros((n_sim,len(flux_bins)-1))
         flux_fraction = np.zeros((n_sim,len(flux_bins)-1))
         for i in range(n_sim):
-            print(f'Running simulation {i}')
+            logger.info(f'Running simulation {i}')
             matched_cat_file = os.path.join(self.output_folder,'completeness',
                                             f'{self.image_id}_sim_{i}_{s_type}_catalog.fits')
 
@@ -350,7 +365,7 @@ class Image:
                                 choice = np.random.choice(np.where(digitized_flux == j)[0], 
                                                           samples_bin, replace=False)
                             except ValueError:
-                                print('Not enough sources in bin, selecting with replacement')
+                                logger.debug('Not enough sources in bin, selecting with replacement')
                                 choice = np.random.choice(np.where(digitized_flux == j)[0], 
                                                           samples_bin, replace=True)
                             catalog_rows.append(choice)
@@ -367,15 +382,17 @@ class Image:
                     catalog_in['major_axis'] = 0
                     catalog_in['minor_axis'] = 0
                 else:
-                    print('Given source type or option cannot be simulated without input catalog')
+                    logger.error('Given source type or option cannot be simulated without input catalog')
                     sys.exit()
 
                 # Inject sources and do sourcefinding
                 out_image_file = os.path.join(self.image_dir,f'{self.image_id}_sim_{i}.fits')
-                catalog_in = self.inject_sources(catalog_in, out_image_file, rpos, imsize, square)
+                catalog_in = self.inject_sources(catalog_in, out_image_file, rpos)
                 out_catalog_file = self.run_bdsf(out_image_file)
 
                 catalog_out = Table.read(out_catalog_file)
+                logger.info(f'Detected {len(catalog_out)} of {len(catalog_in)} sources.')
+
                 matched_cat = self.match_catalog(catalog_in, catalog_out)
                 matched_cat.write(matched_cat_file, overwrite=True)
 
@@ -469,13 +486,32 @@ def main():
     no_delete = args.no_delete
 
     # Define image object
-    image = Image(image_name, outdir)
+    image = Image(image_name, imsize, outdir)
+
+    # Set up logging
+    logger = logging.getLogger('completeness-simulations')
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                                  "%Y-%m-%d %H:%M:%S")
+
+    log_console_handler = logging.StreamHandler()
+    log_console_handler.setFormatter(formatter)
+
+    logfile = os.path.join(image.output_folder, 'completeness.log')
+    log_file_handler = logging.FileHandler(logfile, mode='a')
+    log_file_handler.setFormatter(formatter)
+
+    logger.addHandler(log_file_handler)
+    logger.addHandler(log_console_handler)
 
     flux_bins = np.logspace(min_flux,max_flux,n_flux_bins)
-
     # Get simulated catalog, or otherwise produce a uniform flux density distribution
     if sim_cat_file:
-        print(f'Reading in {sim_cat_file} to draw sources from')
+        logger.info(f'Reading in {sim_cat_file} to draw sources from')
         sim_cat = ascii.read(sim_cat_file)
         sim_cat.rename_column(flux_col, 'flux')
         if rpos:
@@ -483,7 +519,7 @@ def main():
             sim_cat.rename_column(pos_cols[1], 'lat')
         sim_flux = sim_cat[np.logical_and(sim_cat['flux'] > min_flux, sim_cat['flux'] < max_flux)]
     else:
-        print('No simulated catalogue specified, can only generate point sources uniformly')
+        logger.info('No simulated catalogue specified, can only generate point sources uniformly')
         sim_cat = None
 
     if not os.path.exists(os.path.join(image.output_folder, 'completeness')):
@@ -504,8 +540,7 @@ def main():
         sim_cat = sim_flux[np.logical_xor(sim_flux['major_axis'] > 0,sim_flux['minor_axis'] == 0.)]
 
     completeness = image.do_completeness(flux_bins, n_sim, n_sources,
-                                         sim_cat, rflux, rpos,
-                                         imsize, square, no_delete, 
+                                         sim_cat, rflux, rpos, no_delete, 
                                          s_type=sources)
 
     image.plot_results(completeness, s_type=sources)
@@ -523,7 +558,7 @@ def new_argument_parser():
                                 from scratch by typing 'empty' instead of a filename. 
                                 In this case the header and other properties 
                                 will be read from parsets/empty_image.json""")
-    parser.add_argument("sources",
+    parser.add_argument("--sources", default='point', type=str,
                         help="""Type of sources to use for simulations. Options are:
                                 'point': Only injects point sources
                                 'extended': Only injects sources with a nonzero size
@@ -571,6 +606,8 @@ def new_argument_parser():
                               in the directory of the input image""")
     parser.add_argument("--no_delete", action="store_true",
                         help="Do not delete pybdsf logs and images")
+    parser.add_argument("--debug", action="store_true",
+                        help="Run script with debug messages")
 
     return parser
 
