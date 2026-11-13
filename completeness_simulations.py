@@ -202,13 +202,11 @@ class Image:
             X, Y = wcs.world_to_pixel(sky)
 
             # Check if inside usable image
-            if 0 < int(Y) < data_2d.shape[0] and 0 < int(X) < data_2d.shape[0]:
-                if np.squeeze(image)[int(Y), int(X)] == np.nan:
-                    logger.debug('Source is in nan area, it will be skipped!')
+            if 0 < int(Y) < data_2d.shape[0] and 0 < int(X) < data_2d.shape[1]:
+                if np.isnan(np.squeeze(image)[int(Y), int(X)]):
                     catalog_mask[i] = False
                     continue
             else:
-                logger.debug('Source is somehow out of bounds, it will be skipped!')
                 catalog_mask[i] = False
                 continue
 
@@ -239,6 +237,9 @@ class Image:
             else:
                 data_2d[int(Y),int(X)] += 10**source['flux']
         catalog = catalog[catalog_mask]
+
+        if np.sum(np.invert(catalog_mask)) > 0:
+            logger.debug(f'{np.sum(np.invert(catalog_mask))} sources were skipped because they were out of bounds!')
 
         # Convolve
         data_2d[data_2d < 1e-10] = np.nan
@@ -290,7 +291,7 @@ class Image:
         flux_bins   -- Flux bins
         flux_col    -- Flux column of input catalog
         '''
-        match_dist = self.header['BMAJ']*3600 #arcsec
+        match_dist = 0.5 * self.header['BMAJ']*3600 #arcsec
 
         # I guess this only works if the WCS of the image is equatorial
         # Keep for now as is, but might need to be account for in future
@@ -305,7 +306,7 @@ class Image:
         catalog_out['idx'][sep_constraint] = idx[sep_constraint]
 
         catalog_out_matches = catalog_out[sep_constraint]
-        matched_catalog = join(catalog_in, catalog_out_matches, join_type='left', keys='idx')
+        matched_catalog = join(catalog_in, catalog_out_matches, join_type='outer', keys='idx')
 
         return matched_catalog
 
